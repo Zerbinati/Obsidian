@@ -879,7 +879,7 @@ namespace Search {
         }
 
         // Late move pruning. At low depths, only visit a few quiet moves
-        if (seenMoves >= (depth * depth + LmpBase) / (2 - improving))
+        if (seenMoves >= (depth * depth + LmpBase) / (2 - improving) && !pos.checkers)
           skipQuiets = true;
 
         // Futility pruning. If our evaluation is far below alpha,
@@ -943,9 +943,6 @@ namespace Search {
 
         // Reduce or extend depending on history of this move
         R -= history / (isQuiet ? LmrQuietHistoryDiv : LmrCapHistoryDiv);
-
-        // Extend moves that give check
-        R -= (newPos.checkers != 0ULL);
 
         // Extend if this position *was* in a PV node. Even further if it *is*
         R -= ttPV + IsPV;
