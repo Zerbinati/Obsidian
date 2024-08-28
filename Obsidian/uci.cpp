@@ -116,6 +116,8 @@ namespace {
     std::cout << totalNodes << " nodes " << (totalNodes * 1000 / elapsed) << " nps" << std::endl;
 
     Options["Minimal"] = oldMinimal;
+
+    NNUE::benchFinish();
   }
 
   void setoption(std::istringstream& is) {

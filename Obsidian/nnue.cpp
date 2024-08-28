@@ -20,7 +20,10 @@ namespace NNUE {
   constexpr int FtShift = 9;
 
   struct NetFormat {
+  union {
+    alignas(Alignment) int16_t FeatureWeightsAlt[KingBuckets * 768][L1];
     alignas(Alignment) int16_t FeatureWeights[KingBuckets][2][6][64][L1];
+  };
     alignas(Alignment) int16_t FeatureBiases[L1];
 
   union {
@@ -41,6 +44,88 @@ namespace NNUE {
   // For every possible uint16 number, store the count of active bits,
   // and the index of each active bit
   NNZEntry nnzTable[256];
+
+
+
+
+
+struct NNZStats {
+    uint64_t data[L1 / 2];
+    int indexOrder[L1 / 2];
+
+    inline void init() {
+        // First init the index order to default
+        for (int i = 0; i < L1 / 2; ++i) indexOrder[i] = i;
+        memset(data, 0, sizeof(data));
+    };
+
+    inline void update(uint8_t *outputs) {
+        // Update based on if the neuron is activated
+        for (int i = 0; i < L1; ++i) data[i % (L1 / 2)] += bool(outputs[i]);
+    };
+
+    inline void permute() {
+
+    memcpy(&Content, gEmbeddedNNUEData, sizeof(NetFormat));
+
+      std::stable_sort(indexOrder, indexOrder + L1 / 2, [&](const int &a, const int &b) { return data[a] < data[b]; });
+
+      std::memcpy(FTWeightsCopy, Content.FeatureWeights, sizeof(Content.FeatureWeights));
+      std::memcpy(FTBiasesCopy , Content.FeatureBiases , sizeof(Content.FeatureBiases ));
+      std::memcpy(L1WeightsCopy, Content.L1Weights, sizeof(Content.L1Weights));
+
+      for (int i = 0; i < L1 / 2; ++i) {
+          int oldIndex1 = indexOrder[i];
+          int newIndex1 = i;
+          int oldIndex2 = oldIndex1 + L1 / 2;
+          int newIndex2 = newIndex1 + L1 / 2;
+
+          // Permute FT weights
+          for (int j = 0; j < KingBuckets * 768; ++j) {
+              Content.FeatureWeightsAlt[j][newIndex1] = FTWeightsCopy[j][oldIndex1];
+              Content.FeatureWeightsAlt[j][newIndex2] = FTWeightsCopy[j][oldIndex2];
+          }
+
+          // Permute FT Biases
+          Content.FeatureBiases[newIndex1] = FTBiasesCopy[oldIndex1];
+          Content.FeatureBiases[newIndex2] = FTBiasesCopy[oldIndex2];
+
+          // Permute L1 weights
+          for (int j = 0; j < OutputBuckets; ++j) {
+              for (int k = 0; k < L2; ++k) {
+                  Content.L1Weights[j][newIndex1][k] = L1WeightsCopy[j][oldIndex1][k];
+                  Content.L1Weights[j][newIndex2][k] = L1WeightsCopy[j][oldIndex2][k];
+              }
+          }
+      }
+    }
+
+    private:
+    int16_t FTWeightsCopy[KingBuckets * 768][L1];
+    int16_t FTBiasesCopy [L1];
+    int8_t  L1WeightsCopy[OutputBuckets][L1][L2];
+  };
+
+  NNZStats nnzStats;
+
+  void benchFinish() {
+    nnzStats.permute();
+
+    std::ofstream kek("permuted.bin", std::ios_base::binary);
+
+    kek.write((const char*)&Content, sizeof(Content));
+
+    kek.close();
+  }
+
+
+
+
+
+
+
+
+
 
   bool needRefresh(Color side, Square oldKing, Square newKing) {
     const bool oldMirrored = fileOf(oldKing) >= FILE_E;
@@ -176,16 +261,6 @@ namespace NNUE {
             + k] = rawContent->L1Weights[bucket][i + k][j];
 
     delete rawContent;
-
-
-    // Init NNZ table
-    for (int i = 0; i < 256; i++) {
-      nnzTable[i].count = BitCount(i);
-      int j = 0;
-      Bitboard bits = i;
-      while (bits)
-        nnzTable[i].indexes[j++] = popLsb(bits);
-    }
     
     // Transpose weights so that we don't need to permute after packus, because
     // it interleaves each 128 block from a and each 128 block from b, alternately.
@@ -213,6 +288,17 @@ namespace NNUE {
         for (int j = 0; j < NumRegs; j++)
             biases[i + j] = regs[PackusOrder[j]];
     }
+
+    // Init NNZ table
+    for (int i = 0; i < 256; i++) {
+      nnzTable[i].count = BitCount(i);
+      int j = 0;
+      Bitboard bits = i;
+      while (bits)
+        nnzTable[i].indexes[j++] = popLsb(bits);
+    }
+
+    nnzStats.init();
   }
 
   Score evaluate(Position& pos, Accumulator& accumulator) {
@@ -314,6 +400,8 @@ namespace NNUE {
 
       l3Out = reduceAddPs(sums) + Content.L3Biases[bucket];
     }
+
+    nnzStats.update(ftOut);
 
     return l3Out * NetworkScale;
   }

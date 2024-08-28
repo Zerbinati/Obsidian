@@ -81,6 +81,8 @@ namespace NNUE {
 
   using FinnyTable = FinnyEntry[2][KingBuckets];
 
+  void benchFinish();
+
   bool needRefresh(Color side, Square oldKing, Square newKing);
 
   void init();
